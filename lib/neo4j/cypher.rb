@@ -171,10 +171,11 @@ module Neo4j
     end
 
     def create_path(*args, &block)
-      cp = CreatePath.new(@expressions, *args, block)
+      cp = CreatePath.new(@expressions, @variables, *args, &block)
       next_pos = @expressions.count
       self.instance_exec(&block)
-      @expressions[next_pos].skip_prefix!
+      (next_pos ... @expressions.count).each{|i| @expressions[i].as_create_path!}
+      #@expressions[next_pos].skip_prefix!
       cp
     end
 
@@ -182,7 +183,9 @@ module Neo4j
     def to_s
       clause = nil
       @expressions.map do |expr|
+#        puts "  #{expr.clause} id: #{expr.object_id} class: #{expr.class} valid: #{expr.valid?}, path? #{expr.as_create_path?} to_s: #{expr.to_s}"
         next unless expr.valid?
+        next if expr.as_create_path? && expr.kind_of?(Neo4j::Core::Cypher::Create)
         expr_to_s = expr.clause != clause ? "#{expr.prefix} #{expr.to_s}" : "#{expr.separator}#{expr.to_s}"
         clause = expr.clause
         expr_to_s

@@ -250,8 +250,14 @@ module Neo4j
           insert(expressions, clause)
         end
 
-        def skip_prefix!
-          @skip_prefix = true
+        def as_create_path!
+          @as_create_path = true
+          @separator = ''
+          @clause = :create
+        end
+
+        def as_create_path?
+          @as_create_path
         end
 
         def insert(expressions, clause)
@@ -284,7 +290,7 @@ module Neo4j
         end
 
         def prefix
-          @skip_prefix ? "" : prefixes[clause]
+          as_create_path? ? prefixes[:create] : prefixes[clause]
         end
 
         def valid?
@@ -619,14 +625,24 @@ module Neo4j
           c
         end
 
-        # @private
-        def left_var_name
-          @left.respond_to?(:var_name) ? @left.var_name : @left.to_s
+        def left_or_right_value(v)
+          if v.respond_to?(:expr)
+            v.expr
+          elsif v.respond_to?(:var_name)
+            v.var_name
+          else
+            v.to_s
+          end
         end
 
         # @private
-        def right_var_name
-          @right.respond_to?(:var_name) ? @right.var_name : @right.to_s
+        def left_var_name
+          left_or_right_value(@left)
+        end
+
+        # @private
+        def right_var_name(r = @right)
+          left_or_right_value(r)
         end
 
         # @private
@@ -636,8 +652,7 @@ module Neo4j
                 break c.var_expr if c.respond_to?(:var_expr)
                 c = c.respond_to?(:left_expr) && c.left_expr
               end || @right
-
-          r.respond_to?(:expr) ? r.expr : right_var_name
+          right_var_name(r)
         end
 
         # @private
@@ -656,6 +671,7 @@ module Neo4j
           result = (referenced? || curr.referenced?) ? "#{var_name} = " : ""
           result << (algorithm ? "#{algorithm}(" : "")
           begin
+            curr.as_create_path! if as_create_path?
             result << curr.expr
           end while (curr = curr.next)
           result << ")" if algorithm
@@ -848,7 +864,7 @@ module Neo4j
         end
 
         def new(props = nil)
-          Create.new(@expressions, self, props)
+          @creator = Create.new(@expressions, self, props)
           @returnable = true
           self
         end
@@ -859,7 +875,11 @@ module Neo4j
 
         # @private
         def expr
-          to_s
+          if @creator
+            @creator.to_s
+          else
+            to_s
+          end
         end
 
       end
@@ -874,22 +894,29 @@ module Neo4j
         end
 
         def to_s
-          if @props
-            "(#{@node_or_rel_var.to_s} #{to_prop_string(@props)})"
+          without_parantheses = if @props
+            "#{@node_or_rel_var.to_s} #{to_prop_string(@props)}"
           else
-            "(#{@node_or_rel_var.to_s})"
+            @node_or_rel_var.to_s
           end
 
+          as_create_path? ? without_parantheses : "(#{without_parantheses})"
         end
       end
 
       class CreatePath < Expression
-        def initialize(expressions, *args, &block)
+        include Variable
+        attr_reader :var_name
+
+        def initialize(expressions, variables, *args, &block)
           super(expressions, :create)
-       end
+          self.as_create_path!
+          @var_name = "p#{variables.size}"
+        end
+
 
         def to_s
-          ''
+          "#{var_name} = "
         end
       end
 

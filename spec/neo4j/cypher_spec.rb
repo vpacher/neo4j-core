@@ -652,25 +652,20 @@ describe "Neo4j::Cypher" do
         b = node(2).as(:b)
         create_path{a > rel(:friends, :_name => "a.name + '<->' + b.name").as(:r) > b}
         :r
-      end.should be_cypher(%Q[START a=node(1),b=node(2) CREATE  (a)-[r:`friends` {name : a.name + '<->' + b.name}]->(b) RETURN r])
+      end.should be_cypher(%Q[START a=node(1),b=node(2) CREATE p0 = (a)-[r:`friends` {name : a.name + '<->' + b.name}]->(b) RETURN r])
     end
   end
 
 
+  describe "create_path{node.new(:name => 'Andres') > rel(:WORKS_AT) > node < rel(:WORKS_AT) < node.new(:name => 'Micahel')}" do
+    it do
+      Proc.new do
+        create_path{node.new(:name => 'Andres') > rel(:WORKS_AT) > node < rel(:WORKS_AT) < node.new(:name => 'Micahel')}
+      end.should be_cypher(%Q[ CREATE p0 = (v0 {name : 'Andres'})-[:`WORKS_AT`]->(v2)<-[:`WORKS_AT`]-(v4 {name : 'Micahel'}) RETURN p0])
+    end
 
-  #describe "a = Node.new; b = Node.new; Relationship.new(:reltype, a, b)" do
-  #  "START a=node(1), b=node(2) CREATE a-[r:RELTYPE]->b RETURN r"
-  #end
-
-#
-#  describe "Relationship.new(:reltype, a, b, :name => 'foo')" do
-#    # TODO :name => Proc.new{ a.name + '<->' + b.name)}
-#    "START a=node(1), b=node(2) CREATE a-[r:RELTYPE {name : a.name + '<->' + b.name }]->b RETURN r"
-#  end
-#
-#  describe "p = Node.new(:name => 'Andres'); m = Node.new(:name => 'Michael') create_path{p > rel(:works_at) > node(:neo) < (:works_at) > m}; ret p" do
-#    "CREATE p = (andres {name:'Andres'})-[:WORKS_AT]->neo<-[:WORKS_AT]-(michael {name:'Michael'}) RETURN p"
-#  end
+    ""
+  end
 #
 #
 #
