@@ -495,7 +495,7 @@ describe "Neo4j::Cypher" do
       Proc.new do
         joe=node(3)
         friends_of_friends = joe.outgoing(:knows).outgoing(:knows)
-        r = rel('r?:knows').as(:r)
+        r = rel?('knows').as(:r)
         joe > r > friends_of_friends
         r.exist?
         ret(friends_of_friends[:name], count).desc(count).asc(friends_of_friends[:name])
@@ -610,6 +610,131 @@ describe "Neo4j::Cypher" do
     end
   end
 
+  describe "node.new" do
+    it do
+      Proc.new do
+        node.new
+      end.should be_cypher(%Q[ CREATE (v0)])
+    end
+  end
+
+  describe "node.new(:name => 'Andres', :age => 42)" do
+    it do
+      Proc.new do
+        node.new(:name => 'Andres', :age => 42)
+      end.should be_cypher(%Q[ CREATE (v0 {name : 'Andres', age : 42})])
+    end
+  end
+
+  describe "node.new(:name => 'Andres').as(:a); :a" do
+    it do
+      Proc.new do
+        node.new(:name => 'Andres').as(:a)
+        :a
+      end.should be_cypher(%Q[ CREATE (a {name : 'Andres'}) RETURN a])
+    end
+  end
+
+  describe "node.new(:_name => 'Andres').as(:a); :a" do
+    it do
+      Proc.new do
+        node.new(:_name => 'Andres').as(:a) # Notice, no "" around the string !
+        :a
+      end.should be_cypher(%Q[ CREATE (a {name : Andres}) RETURN a])
+    end
+  end
+
+
+  describe "a = node(1).as(:a); b = node(2).as(:b); create_path{a > rel(:friends, :_name => \"a.name + '<->' + b.name\").as(:r) > b} :r" do
+    it do
+      Proc.new do
+        a = node(1).as(:a)
+        b = node(2).as(:b)
+        create_path{a > rel(:friends, :_name => "a.name + '<->' + b.name").as(:r) > b}
+        :r
+      end.should be_cypher(%Q[START a=node(1),b=node(2) CREATE  (a)-[r:`friends` {name : a.name + '<->' + b.name}]->(b) RETURN r])
+    end
+  end
+
+
+
+  #describe "a = Node.new; b = Node.new; Relationship.new(:reltype, a, b)" do
+  #  "START a=node(1), b=node(2) CREATE a-[r:RELTYPE]->b RETURN r"
+  #end
+
+#
+#  describe "Relationship.new(:reltype, a, b, :name => 'foo')" do
+#    # TODO :name => Proc.new{ a.name + '<->' + b.name)}
+#    "START a=node(1), b=node(2) CREATE a-[r:RELTYPE {name : a.name + '<->' + b.name }]->b RETURN r"
+#  end
+#
+#  describe "p = Node.new(:name => 'Andres'); m = Node.new(:name => 'Michael') create_path{p > rel(:works_at) > node(:neo) < (:works_at) > m}; ret p" do
+#    "CREATE p = (andres {name:'Andres'})-[:WORKS_AT]->neo<-[:WORKS_AT]-(michael {name:'Michael'}) RETURN p"
+#  end
+#
+#
+#
+#  describe "david = node(1); david <=> node(:other_person) >> node}; with(:other_person, count){|_, foaf| foaf > 1} :other_person " do
+#           "START david=node(1) MATCH david--otherPerson-->() WITH otherPerson, count(*) as foaf WHERE foaf > 1 RETURN otherPerson"
+#  end
+#
+#  describe "" do
+#    it do
+#      Proc.new do
+#        n = node(1); n > rel(:knows) > :other; create_path(:other){|other| other > rel(:works) > node }
+#      end
+#      "START n=node(1) MATCH n-[:KNOWS]-other WITH other CREATE n-[:WORKS]->other"
+#    end
+#  end
+#
+#  describe "a = node(2); other = node; a > rel(:knows) > other; with(other, other.counter){|other, c| c == 1}; with(other){|other| other > rel(:works) > :work}; :work " do
+#
+#    "START a=node(2) MATCH a-[:KNOWS]-other WITH other, other.counter as c WHERE c = 1 WITH other MATCH other-[:WORKS]->work RETURN work"
+#  end
+#
+#
+#  "START n=node(127) MATCH(n)-[:friends]->(x) WITH n, collect(distinct x) as friends MATCH(n)-[:outer_only_friends]->(y) WITH n, collect(distinct y) as outer, friends RETURN collect(friends + outer) as stuff"
+#
+#
+#  "START a=node(2) MATCH a-[:KNOWS]-other CREATE other-[:WORKS]->n"
+#
+#  "START a=node(2) MATCH a-[:KNOWS]-other--() with other, count(*) as c SET other.counter = c"
+#
+#  describe "root = node(0); curr_user = node(1); company = Node.new(:name => 'Google'); create_path{ root > rel(:has_company) > company; curr_user > rel(:has_company, :created_at => '2012') > company}" do
+#    "START root = node(0), currentUser = node(1)
+#CREATE
+#    company = { name: 'Google', url: 'www.google.com' },
+#    root-[rc:HAS_COMPANY]->company,
+#    currentUser-[uc:HAS_COMPANY { createdAt: '2012-04-24T16:14:34.648Z' } ]->company
+#RETURN
+#    company.name, uc.createdAt;"
+#  end
+#
+#  describe "left=node(1), right=node(3,4); create_unique{left > rel(:knows).as(:r) > right}; :r" do
+#            "START left=node(1), right=node(3,4) CREATE UNIQUE left-[r:KNOWS]->right RETURN r"
+#  end
+#
+#
+#  describe "n = node(2); n.surname = 'Taylor'; ret n" do
+#    "START n = node(2) SET n.surname = 'Taylor' RETURN n"
+#  end
+#
+#  describe "node(4).del" do
+#    "START n = node(4) DELETE n"
+#  end
+#
+#  describe "n = node(3); n > r=rel > node; delete(n,r)" do
+#    "START n = node(3) MATCH n-[r]-() DELETE n, r"
+#  end
+#
+#  describe "andres = node(3); delete(andres.age); andres" do
+#    "START andres = node(3) DELETE andres.age RETURN andres"
+#  end
+#
+#  describe "begin = node(2); end = node(1); p = begin > rel > end; p.nodes.foreach { |x| x.marked = true }" do
+#    "START begin = node(2), end = node(1) MATCH p = begin -[*]-> end foreach(n in nodes(p) : SET n.marked = true)"
+#  end
+#
   # Cypher > 1.7.0 (snapshot)
   # start begin = node(2), end = node(1) match p = begin -[*]-> end with p foreach(r in relationships(p) : delete r) with p foreach(n in nodes(p) : delete n)
   # start a=node(0), b=node(5) with a,b create rel a-[:friends]->b

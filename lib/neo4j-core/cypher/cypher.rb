@@ -231,11 +231,30 @@ module Neo4j
         end
       end
 
+      module ToPropString
+        def to_prop_string(props)
+          key_values = props.keys.map do |key|
+            raw = key.to_s[0] == '_'
+            val = props[key].is_a?(String) && !raw ? "'#{props[key]}'" : props[key]
+            "#{raw ? key[1..-1] : key} : #{val}"
+          end
+          "{#{key_values.join(', ')}}"
+        end
+      end
+
       class Expression
         attr_reader :expressions
         attr_accessor :separator, :clause
 
         def initialize(expressions, clause)
+          insert(expressions, clause)
+        end
+
+        def skip_prefix!
+          @skip_prefix = true
+        end
+
+        def insert(expressions, clause)
           @clause = clause
           @expressions = expressions
           insert_last(clause)
@@ -257,15 +276,15 @@ module Neo4j
         end
 
         def prev_clause(clause)
-          {:limit => :skip, :skip => :order_by, :order_by => :return, :return => :where, :where => :match, :match => :start}[clause]
+          {:limit => :skip, :skip => :order_by, :order_by => :return, :return => :where, :where => :match, :match => :create, :create => :start}[clause]
         end
 
         def prefixes
-          {:start => "START", :where => " WHERE", :match => " MATCH", :return => " RETURN", :order_by => " ORDER BY", :skip => " SKIP", :limit => " LIMIT"}
+          {:start => "START", :where => " WHERE", :match => " MATCH", :return => " RETURN", :order_by => " ORDER BY", :skip => " SKIP", :limit => " LIMIT", :create => ' CREATE'}
         end
 
         def prefix
-          prefixes[clause]
+          @skip_prefix ? "" : prefixes[clause]
         end
 
         def valid?
@@ -494,6 +513,10 @@ module Neo4j
 
         def to_s
           return_method ? as_return_method : var_name.to_s
+        end
+
+        def returnable?
+          true
         end
       end
 
@@ -816,11 +839,22 @@ module Neo4j
           variables << self
           @variables = variables
           @expressions = expressions
+          @returnable = false
         end
 
         # @return [String] a cypher string for this node variable
         def to_s
           var_name
+        end
+
+        def new(props = nil)
+          Create.new(@expressions, self, props)
+          @returnable = true
+          self
+        end
+
+        def returnable?
+          @returnable
         end
 
         # @private
@@ -830,23 +864,63 @@ module Neo4j
 
       end
 
+      class Create < Expression
+        include ToPropString
+
+        def initialize(expressions, node_or_rel_var, props)
+          @node_or_rel_var = node_or_rel_var
+          @props = props
+          super(expressions, :create)
+        end
+
+        def to_s
+          if @props
+            "(#{@node_or_rel_var.to_s} #{to_prop_string(@props)})"
+          else
+            "(#{@node_or_rel_var.to_s})"
+          end
+
+        end
+      end
+
+      class CreatePath < Expression
+        def initialize(expressions, *args, &block)
+          super(expressions, :create)
+       end
+
+        def to_s
+          ''
+        end
+      end
+
       # represent an unbound relationship variable used in match,where,return statement
       class RelVar
         include Variable
+        include ToPropString
 
         attr_reader :var_name, :expr, :expressions
 
-        def initialize(expressions, variables, expr)
+        def initialize(expressions, variables, expr, props = nil)
           variables << self
           @expr = expr
           @expressions = expressions
           guess = expr ? /([[:alpha:]_]*)/.match(expr)[1] : ""
           @auto_var_name = "v#{variables.size}"
           @var_name = guess.empty? ? @auto_var_name : guess
+          @expr = "#@expr #{to_prop_string(props)}" if props
         end
 
         def rel_type
           Property.new(@expressions, self, 'type').to_function!
+        end
+
+        def optionally!
+          if @expr.include?(':')
+            @expr.sub!(/[^:\?]*/, "#{@var_name}?")
+          else
+            @expr = "#{@var_name}?:#@expr"
+          end
+          self
         end
 
         def [](p)
@@ -857,11 +931,15 @@ module Neo4j
           super
         end
 
-        # @return [String] a cypher string for this relationship variable
-        def to_s
-          var_name
+        def as(name)
+          x = super
+          if @expr.include?(':')
+            @expr.sub!(/[^:\?]*/, "#{@var_name}")
+          else
+            @expr = "#{name}:#@expr"
+          end
+          x
         end
-
       end
 
       class ExprOp < Expression
@@ -967,7 +1045,7 @@ module Neo4j
         end
       end
 
-      class Where < Expression
+        class Where < Expression
         def initialize(expressions, where_statement = nil)
           super(expressions, :where)
           @where_statement = where_statement

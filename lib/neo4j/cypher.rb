@@ -47,8 +47,9 @@ module Neo4j
             a
         end
       end
+
       res = self.instance_exec(*to_dsl_args, &dsl_block)
-      unless res.kind_of?(Return)
+      unless res.respond_to?(:returnable?) && res.returnable?
         res.respond_to?(:to_a) ? ret(*res) : ret(res)
       end
     end
@@ -112,12 +113,16 @@ module Neo4j
       if rels.first.is_a?(Fixnum) || rels.first.respond_to?(:neo_id)
         StartRel.new(rels, @expressions)
       elsif rels.first.is_a?(Symbol)
-        RelVar.new(@expressions, @variables, ":`#{rels.first}`").as(rels.first)
+        RelVar.new(@expressions, @variables, ":`#{rels.first}`", rels[1])
       elsif rels.first.is_a?(String)
-        RelVar.new(@expressions, @variables, rels.first)
+        RelVar.new(@expressions, @variables, rels.first, rels[1])
       else
         raise "Unknown arg #{rels.inspect}"
       end
+    end
+
+    def rel?(*rels)
+      rel(*rels).optionally!
     end
 
     # Specifies a return statement.
@@ -163,6 +168,14 @@ module Neo4j
     def rels(*args)
       s = args.map { |x| x.referenced!; x.var_name }.join(", ")
       Return.new("relationships(#{s})", @expressions)
+    end
+
+    def create_path(*args, &block)
+      cp = CreatePath.new(@expressions, *args, block)
+      next_pos = @expressions.count
+      self.instance_exec(&block)
+      @expressions[next_pos].skip_prefix!
+      cp
     end
 
     # Converts the DSL query to a cypher String which can be executed by cypher query engine.
