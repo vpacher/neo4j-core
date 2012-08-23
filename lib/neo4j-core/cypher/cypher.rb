@@ -234,9 +234,9 @@ module Neo4j
       module ToPropString
         def to_prop_string(props)
           key_values = props.keys.map do |key|
-            raw = key.to_s[0] == '_'
+            raw = key.to_s[0,1] == '_'
             val = props[key].is_a?(String) && !raw ? "'#{props[key]}'" : props[key]
-            "#{raw ? key[1..-1] : key} : #{val}"
+            "#{raw ? key.to_s[1..-1] : key} : #{val}"
           end
           "{#{key_values.join(', ')}}"
         end
