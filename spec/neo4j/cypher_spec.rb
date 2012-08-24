@@ -285,6 +285,79 @@ describe "Neo4j::Cypher" do
     it { Proc.new { node(3) >> :b }.should be_cypher(%{START n0=node(3) MATCH m2 = (n0)-->(b) RETURN m2}) }
   end
 
+
+  describe "node(1).both(node(:other_person))" do
+    it do
+      Proc.new do
+        node(1).both(node(:other_person))
+      end.should be_cypher(%Q[START n0=node(1) MATCH (n0)-[?]-(other_person) RETURN other_person])
+    end
+  end
+
+  describe "node(1).both(node(:other_person)).both(node(:foo))" do
+    it do
+      Proc.new do
+        node(1).both(node(:other_person)).both(node(:foo))
+      end.should be_cypher(%Q[START n0=node(1) MATCH (n0)-[?]-(other_person),(other_person)-[?]-(foo) RETURN foo])
+    end
+  end
+
+  describe "node(1).both(:friends)" do
+    it do
+      Proc.new do
+        node(1).both(:friends)
+      end.should be_cypher(%Q[START n0=node(1) MATCH (n0)-[:`friends`]-(v0) RETURN v0])
+    end
+  end
+
+  describe "node(1).both(:friends, :work)" do
+    it do
+      Proc.new do
+        node(1).both(:friends, :work)
+      end.should be_cypher(%Q[START n0=node(1) MATCH (n0)-[:`friends`|`work`]-(v0) RETURN v0])
+    end
+  end
+
+  describe "node(1).both(:friends, :work, node(42)).both" do
+    it do
+      Proc.new do
+        node(1).both(:friends, :work, node(42)).both
+      end.should be_cypher(%Q[START n0=node(1),n1=node(42) MATCH (n0)-[:`friends`|`work`]-(n1),(n1)-[?]-(v0) RETURN v0])
+    end
+  end
+
+  describe "node(1).outgoing(:friends, :work, node(42)).incoming" do
+    it do
+      Proc.new do
+        node(1).outgoing(:friends, :work, node(42)).incoming
+      end.should be_cypher(%Q[START n0=node(1),n1=node(42) MATCH (n0)-[:`friends`|`work`]->(n1),(n1)<-[?]-(v0) RETURN v0])
+    end
+  end
+
+  describe "node(1).both?(:friends)" do
+    it do
+      Proc.new{node(1).both?(:friends)}.should be_cypher(%Q[START n0=node(1) MATCH (n0)-[?:`friends`]-(v0) RETURN v0])
+    end
+  end
+
+  describe "node(1).both('r:friends')" do
+    it do
+      Proc.new{node(1).both('r:friends')}.should be_cypher(%Q[START n0=node(1) MATCH (n0)-[r:friends]-(v0) RETURN v0])
+    end
+  end
+
+  describe "node(1).both?(:friends)" do
+    it {Proc.new{node(1).both?(:friends)}.should be_cypher(%Q[START n0=node(1) MATCH (n0)-[?:`friends`]-(v0) RETURN v0])}
+  end
+
+  describe "node(1).outgoing?(:friends)" do
+    it { Proc.new { node(1).outgoing?(:friends)}.should be_cypher(%Q[START n0=node(1) MATCH (n0)-[?:`friends`]->(v0) RETURN v0]) }
+  end
+
+  describe "node(1).incoming?(:friends)" do
+    it { Proc.new { node(1).incoming?(:friends)}.should be_cypher(%Q[START n0=node(1) MATCH (n0)<-[?:`friends`]-(v0) RETURN v0]) }
+  end
+
   describe %{p = node(3) >> :b; [:b, p.length]} do
     it { Proc.new { p = node(3) >> :b; [:b, p.length] }.should be_cypher(%{START n0=node(3) MATCH m2 = (n0)-->(b) RETURN b,length(m2)}) }
   end
@@ -663,15 +736,39 @@ describe "Neo4j::Cypher" do
         create_path{node.new(:name => 'Andres') > rel(:WORKS_AT) > node < rel(:WORKS_AT) < node.new(:name => 'Micahel')}
       end.should be_cypher(%Q[ CREATE p0 = (v0 {name : 'Andres'})-[:`WORKS_AT`]->(v2)<-[:`WORKS_AT`]-(v4 {name : 'Micahel'}) RETURN p0])
     end
-
-    ""
   end
-#
-#
-#
-#  describe "david = node(1); david <=> node(:other_person) >> node}; with(:other_person, count){|_, foaf| foaf > 1} :other_person " do
-#           "START david=node(1) MATCH david--otherPerson-->() WITH otherPerson, count(*) as foaf WHERE foaf > 1 RETURN otherPerson"
-#  end
+
+
+  describe "node(1) <=> node(:other_person) >> node; :other_person" do
+    it do
+      Proc.new do
+        node(1) <=> node(:other_person) >> node
+        :other_person
+      end.should be_cypher(%Q[START n0=node(1) MATCH (n0)--(other_person)-->(v1) RETURN other_person])
+    end
+
+  end
+
+  describe "node(1) >> node(:other_person) <=> node; :other_person" do
+    it do
+      Proc.new do
+        node(1) >> node(:other_person) <=> node
+        :other_person
+      end.should be_cypher(%Q[START n0=node(1) MATCH (n0)-->(other_person)--(v1) RETURN other_person])
+    end
+
+  end
+
+  describe "node(1) <=> node(:other_person) >> node}; with(:other_person, count){|_, foaf| foaf > 1} :other_person " do
+    it do
+      Proc.new do
+        node(1) <=> node(:other_person) >> node
+        with(:other_person, count) { |_, foaf| foaf > 1 }
+        :other_person
+      end.should be_cypher(%Q[START n0=node(1) MATCH (n0)--(other_person)-->(v1) WITH other_person,count(*) as w2 WHERE w2 > 1 RETURN other_person])
+    end
+  end
+
 #
 #  describe "" do
 #    it do

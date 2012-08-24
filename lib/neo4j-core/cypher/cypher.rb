@@ -205,22 +205,48 @@ module Neo4j
           MatchNode.new(self, other, expressions, :outgoing)
         end
 
-        def outgoing(rel_type)
-          node = NodeVar.new(@expressions, @variables)
-          MatchRelLeft.new(self, ":`#{rel_type}`", expressions, :outgoing) > node
+        def outgoing(*rel_types)
+          node, rel_string = node_and_relstring(rel_types)
+          MatchRelLeft.new(self, rel_string, expressions, :outgoing) > node
           node
         end
 
-        def incoming(rel_type)
-          node = NodeVar.new(@expressions, @variables)
-          MatchRelLeft.new(self, ":`#{rel_type}`", expressions, :incoming) < node
+        def outgoing?(*rel_types)
+          node, rel_string = node_and_relstring(rel_types)
+          MatchRelLeft.new(self, "?#{rel_string}", expressions, :outgoing) > node
           node
         end
 
-        def both(rel_type)
-          node = NodeVar.new(@expressions, @variables)
-          MatchRelLeft.new(self, ":`#{rel_type}`", expressions, :both) < node
+        def incoming(*rel_types)
+          node, rel_string = node_and_relstring(rel_types)
+          MatchRelLeft.new(self, rel_string, expressions, :incoming) < node
           node
+        end
+
+        def incoming?(*rel_types)
+          node, rel_string = node_and_relstring(rel_types)
+          MatchRelLeft.new(self, "?#{rel_string}", expressions, :incoming) < node
+          node
+        end
+
+        def both(*rel_types)
+          node, rel_string = node_and_relstring(rel_types)
+          MatchRelLeft.new(self, rel_string, expressions, :both) < node
+          node
+        end
+
+        def both?(*rel_types)
+          node, rel_string = node_and_relstring(rel_types)
+          MatchRelLeft.new(self, "?#{rel_string}", expressions, :both) < node
+          node
+        end
+
+        def node_and_relstring(rel_types)
+          node = rel_types.pop if rel_types.last.kind_of?(Matchable)
+          node ||= NodeVar.new(@expressions, @variables)
+          start_char = rel_types.first.is_a?(Symbol) ? ':' : ''
+          rel_string = rel_types.empty? ? "?" : start_char + rel_types.map { |e| e.is_a?(Symbol) ? "`#{e}`" : e.to_s }.join('|')
+          return node, rel_string
         end
 
         # Incoming relationship to other node
@@ -243,7 +269,9 @@ module Neo4j
       end
 
       class Expression
+        # @return [Enumerable]
         attr_reader :expressions
+
         attr_accessor :separator, :clause
 
         def initialize(expressions, clause)
@@ -254,6 +282,12 @@ module Neo4j
           @as_create_path = true
           @separator = ''
           @clause = :create
+        end
+
+        def debug
+          expressions.each_with_index do |expr, i|
+            puts "  #{i} #{expr.clause} id: #{expr.object_id} class: #{expr.class} valid: #{expr.valid?}, path? #{expr.as_create_path?} to_s: #{expr.to_s}"
+          end
         end
 
         def as_create_path?
@@ -269,8 +303,9 @@ module Neo4j
 
         def insert_last(clause)
           curr_clause = clause
-          while (i = @expressions.reverse.index { |e| e.clause == curr_clause }).nil? && curr_clause != :start
+          while (i = @expressions.reverse.index { |e| e.clause == curr_clause || e.clause == :with}).nil?
             curr_clause = prev_clause(curr_clause)
+            break unless curr_clause
           end
 
           if i.nil?
@@ -282,11 +317,12 @@ module Neo4j
         end
 
         def prev_clause(clause)
-          {:limit => :skip, :skip => :order_by, :order_by => :return, :return => :where, :where => :match, :match => :create, :create => :start}[clause]
+          {:limit => :skip, :skip => :order_by, :order_by => :return, :return => :where, :where => :match, :match => :create, :create => :start, :with => nil}[clause]
         end
 
         def prefixes
-          {:start => "START", :where => " WHERE", :match => " MATCH", :return => " RETURN", :order_by => " ORDER BY", :skip => " SKIP", :limit => " LIMIT", :create => ' CREATE'}
+          {:start => "START", :where => " WHERE", :match => " MATCH", :return => " RETURN", :order_by => " ORDER BY", :skip => " SKIP",
+           :limit => " LIMIT", :create => ' CREATE', :with => " WITH"}
         end
 
         def prefix
@@ -707,6 +743,10 @@ module Neo4j
           self.next = MatchRelRight.new(self, other, expressions, :both)
         end
 
+        def outgoing(*rels_and_node)
+          right.outgoing(*rels_and_node)
+        end
+
         # @return [String] a cypher string for this match.
         def expr
           if prev
@@ -757,6 +797,10 @@ module Neo4j
           self.next = MatchNode.new(self, other, expressions, :outgoing)
         end
 
+        def outgoing(*rels_and_node)
+          right.outgoing(*rels_and_node)
+        end
+
         # @return [String] a cypher string for this match.
         def expr
           "#{dir_op}(#{right_expr})"
@@ -794,6 +838,7 @@ module Neo4j
                        "--"
                    end
           super(left, right, expressions, dir, dir_op)
+          expressions.delete(right) if right.is_a?(Match)
         end
 
         # @return [String] a cypher string for this match.
@@ -801,6 +846,8 @@ module Neo4j
           if prev
             # we have chained more then one relationships in a match expression
             "#{dir_op}(#{right_expr})"
+          elsif right.respond_to?(:prev)
+            "(#{left_var_name})#{dir_op}#{right_expr}"
           else
             # the right is an relationship and could be an expressions, e.g "r?"
             "(#{left_var_name})#{dir_op}(#{right_expr})"
@@ -815,6 +862,11 @@ module Neo4j
         def >>(other)
           expressions.delete(self)
           self.next = MatchNode.new(self, other, expressions, :outgoing)
+        end
+
+        def <=>(other)
+          expressions.delete(self)
+          self.next = MatchNode.new(self, other, expressions, :both)
         end
 
         # @param [Symbol,NodeVar,String] other part of the match cypher statement.
@@ -917,6 +969,28 @@ module Neo4j
 
         def to_s
           "#{var_name} = "
+        end
+      end
+
+      class With < Expression
+        def initialize(eval_context, *args, &block)
+          expr = eval_context.expressions
+          super(expr, :with)
+          args.each { |a| expressions.delete(a) }
+          i = 0
+          @arg_list = args.map do |a|
+            i += 1
+            if a.is_a?(String) || a.is_a?(Symbol)
+              a.to_s
+            else
+              "#{a.to_s} as w#{i}"
+            end
+          end.join(',')
+          @body = Neo4j::Cypher.new(*args, &block).skip_return!.to_s
+        end
+
+        def to_s
+          @arg_list + @body
         end
       end
 

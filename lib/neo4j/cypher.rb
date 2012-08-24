@@ -33,7 +33,9 @@ module Neo4j
     def initialize(*args, &dsl_block)
       @expressions = []
       @variables = []
+      i = 0
       to_dsl_args = args.map do |a|
+        i += 1
         case
           when a.is_a?(Array) && a.first.respond_to?(:_java_node)
             StartNode.new(a, @expressions)
@@ -43,6 +45,10 @@ module Neo4j
             StartNode.new([a], @expressions)
           when a.respond_to?(:_java_rel)
             StartRel.new([a], @expressions)
+          when a.is_a?(Return)
+            Property.new(expressions, "w#{i}", nil)
+          when a.is_a?(Symbol)
+            Property.new(expressions, a.to_s, nil)
           else
             a
         end
@@ -52,6 +58,11 @@ module Neo4j
       unless res.respond_to?(:returnable?) && res.returnable?
         res.respond_to?(:to_a) ? ret(*res) : ret(res)
       end
+    end
+
+    def skip_return!
+      @expressions.delete_if{|e| e.clause == :return}
+      self
     end
 
     # Does nothing, just for making the DSL easier to read (maybe).
@@ -175,15 +186,17 @@ module Neo4j
       next_pos = @expressions.count
       self.instance_exec(&block)
       (next_pos ... @expressions.count).each{|i| @expressions[i].as_create_path!}
-      #@expressions[next_pos].skip_prefix!
       cp
+    end
+
+    def with(*args, &block)
+      With.new(self, *args, &block)
     end
 
     # Converts the DSL query to a cypher String which can be executed by cypher query engine.
     def to_s
       clause = nil
       @expressions.map do |expr|
-#        puts "  #{expr.clause} id: #{expr.object_id} class: #{expr.class} valid: #{expr.valid?}, path? #{expr.as_create_path?} to_s: #{expr.to_s}"
         next unless expr.valid?
         next if expr.as_create_path? && expr.kind_of?(Neo4j::Core::Cypher::Create)
         expr_to_s = expr.clause != clause ? "#{expr.prefix} #{expr.to_s}" : "#{expr.separator}#{expr.to_s}"
