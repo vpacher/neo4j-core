@@ -30,7 +30,7 @@ module Neo4j
               expr = []
               query_hash.each{|pair|  expr << (ret[pair[0]] == pair[1])}.to_a
               expr.each_with_index do |obj, i|
-                Neo4j::Core::Cypher::ExprOp.new(obj, expr[i+1], "and") if i < expr.size - 1
+                Neo4j::Core::Cypher::Operator.new(obj, expr[i+1], "and") if i < expr.size - 1
               end
             end
 

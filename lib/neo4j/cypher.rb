@@ -9,7 +9,7 @@ module Neo4j
   #
   class Cypher
     # @private
-    attr_reader :expressions
+    attr_reader :clause_list, :variables, :result
 
     include Neo4j::Core::Cypher
     include Neo4j::Core::Cypher::MathFunctions
@@ -31,37 +31,37 @@ module Neo4j
     # @yieldreturn [Return, Object] If the return is not an instance of Return it will be converted it to a Return object (if possible).
     # @see Neo4j::Core::Cypher
     def initialize(*args, &dsl_block)
-      @expressions = []
-      @variables = []
+      @clause_list = Neo4j::Core::Cypher::ClauseList.new
+
       i = 0
       to_dsl_args = args.map do |a|
         i += 1
         case
           when a.is_a?(Array) && a.first.respond_to?(:_java_node)
-            StartNode.new(a, @expressions)
+            StartNode.new(@clause_list, a)
           when a.is_a?(Array) && a.first.respond_to?(:_java_rel)
-            StartRel.new(a, @expressions)
+            StartRel.new(@clause_list, a)
           when a.respond_to?(:_java_node)
-            StartNode.new([a], @expressions)
+            StartNode.new(@clause_list, [a])
           when a.respond_to?(:_java_rel)
-            StartRel.new([a], @expressions)
+            StartRel.new(@clause_list, [a])
           when a.is_a?(Return)
-            Property.new(expressions, "w#{i}", nil)
+            Property.new(@clause_list, "w#{i}", nil)
           when a.is_a?(Symbol)
-            Property.new(expressions, a.to_s, nil)
+            Property.new(@clause_list, a.to_s, nil)
           else
             a
         end
       end
 
-      res = self.instance_exec(*to_dsl_args, &dsl_block)
-      unless res.respond_to?(:returnable?) && res.returnable?
-        res.respond_to?(:to_a) ? ret(*res) : ret(res)
+      @result = self.instance_exec(*to_dsl_args, &dsl_block)
+      unless @result.respond_to?(:clause) && @result.clause.kind_of?(Return)
+        @result.respond_to?(:to_a) ? ret(*@result) : ret(@result)
       end
     end
 
     def skip_return!
-      @expressions.delete_if{|e| e.clause == :return}
+      @clause_list.delete_if{|e| e.clause == :return}
       self
     end
 
@@ -78,7 +78,7 @@ module Neo4j
     end
 
     def where(w=nil)
-      Where.new(@expressions, w) if w.is_a?(String)
+      Where.new(@clause_list, w) if w.is_a?(String)
       self
     end
 
@@ -88,7 +88,7 @@ module Neo4j
     # @param [Symbol] index_type the type of index
     # @return [NodeQuery]
     def query(index_class, q, index_type = :exact)
-      NodeQuery.new(index_class, q, index_type, @expressions)
+      NodeQuery.new(@clause_list, index_class, q, index_type).eval_context
     end
 
     # Specifies a start node by performing a lucene query.
@@ -97,7 +97,7 @@ module Neo4j
     # @param [String, Symbol] value the value of the key we ask for
     # @return [NodeLookup]
     def lookup(index_class, key, value)
-      NodeLookup.new(index_class, key, value, @expressions)
+      NodeLookup.new(@clause_list, index_class, key, value).eval_context
     end
 
     # Creates a node variable.
@@ -110,11 +110,11 @@ module Neo4j
     # @return [StartNode, NodeVar]
     def node(*nodes)
       if nodes.first.is_a?(Symbol)
-        NodeVar.new(@expressions, @variables).as(nodes.first)
+        NodeVar.new(@clause_list).eval_context.as(nodes.first)
       elsif !nodes.empty?
-        StartNode.new(nodes, @expressions)
+        StartNode.new(@clause_list, nodes).eval_context
       else
-        NodeVar.new(@expressions, @variables)
+        NodeVar.new(@clause_list).eval_context
       end
     end
 
@@ -122,11 +122,11 @@ module Neo4j
     # @return [StartRel, RelVar]
     def rel(*rels)
       if rels.first.is_a?(Fixnum) || rels.first.respond_to?(:neo_id)
-        StartRel.new(rels, @expressions)
+        StartRel.new(@clause_list, rels).eval_context
       elsif rels.first.is_a?(Symbol)
-        RelVar.new(@expressions, @variables, ":`#{rels.first}`", rels[1])
+        RelVar.new(@clause_list, ":`#{rels.first}`", rels[1]).eval_context
       elsif rels.first.is_a?(String)
-        RelVar.new(@expressions, @variables, rels.first, rels[1])
+        RelVar.new(@clause_list, rels.first, rels[1]).eval_context
       else
         raise "Unknown arg #{rels.inspect}"
       end
@@ -143,9 +143,19 @@ module Neo4j
     # @return [Return]
     def ret(*returns)
       options = returns.last.is_a?(Hash) ? returns.pop : {}
-      @expressions -= @expressions.find_all { |r| r.clause == :return && returns.include?(r) }
-      returns.each { |ret| Return.new(ret, @expressions, options) unless ret.respond_to?(:clause) && [:order_by, :skip, :limit].include?(ret.clause)}
-      @expressions.last
+      @clause_list.remove_all(:return)
+      # remove already return clauses
+      returns.each{|ret| raise "OJOJ" if ret.kind_of?(Return)}
+
+      returns.each do |ret|
+        if (ret.is_a?(Symbol) || ret.is_a?(String))
+          Return.new(@clause_list, ret, options)
+        elsif ret.clause.returnable?
+          Return.new(@clause_list, ret, options)
+        end
+      end
+      @clause_list.debug
+      @clause_list.to_a.last.eval_context
     end
 
     def shortest_path(&block)
@@ -163,30 +173,26 @@ module Neo4j
     # @param [Symbol,nil] variable the entity we want to count or wildcard (*)
     # @return [Return] a counter return clause
     def count(variable='*')
-      Return.new("count(#{variable.to_s})", @expressions)
+      Return.new("count(#{variable.to_s})", @clause_list)
     end
 
     def coalesce(*args)
       s = args.map { |x| x.var_name }.join(", ")
-      Return.new("coalesce(#{s})", @expressions)
+      Return.new("coalesce(#{s})", @clause_list)
     end
 
     def nodes(*args)
       s = args.map { |x| x.referenced!; x.var_name }.join(", ")
-      Return.new("nodes(#{s})", @expressions)
+      Return.new("nodes(#{s})", @clause_list)
     end
 
     def rels(*args)
       s = args.map { |x| x.referenced!; x.var_name }.join(", ")
-      Return.new("relationships(#{s})", @expressions)
+      Return.new("relationships(#{s})", @clause_list)
     end
 
     def create_path(*args, &block)
-      cp = CreatePath.new(@expressions, @variables, *args, &block)
-      next_pos = @expressions.count
-      self.instance_exec(&block)
-      (next_pos ... @expressions.count).each{|i| @expressions[i].as_create_path!}
-      cp
+      CreatePath.new(self, *args, &block)
     end
 
     def with(*args, &block)
@@ -195,14 +201,7 @@ module Neo4j
 
     # Converts the DSL query to a cypher String which can be executed by cypher query engine.
     def to_s
-      clause = nil
-      @expressions.map do |expr|
-        next unless expr.valid?
-        next if expr.as_create_path? && expr.kind_of?(Neo4j::Core::Cypher::Create)
-        expr_to_s = expr.clause != clause ? "#{expr.prefix} #{expr.to_s}" : "#{expr.separator}#{expr.to_s}"
-        clause = expr.clause
-        expr_to_s
-      end.join
+      @clause_list.to_cypher
     end
 
   end
