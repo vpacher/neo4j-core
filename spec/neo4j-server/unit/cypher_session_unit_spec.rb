@@ -118,11 +118,24 @@ module Neo4j::Server
           session = Neo4j::Session.create_session(:server_db, params)
           handlers = session.connection.builder.handlers.map(&:name)
           expect(handlers).to include('Faraday::Request::BasicAuthentication')
-
         end
-
       end
 
+      describe 'with initialization params' do
+        let(:init_params_false) { {initialize: { ssl: { verify: false }}} }
+        let(:init_params_true)  { {initialize: { ssl: { verify: true  }}} }
+        it 'passes the options through to Faraday.new' do
+          base_url = 'http://localhost:7474'
+
+          params = [base_url, init_params_false]
+          session_false = Neo4j::Session.create_session(:server_db, params)
+          expect(session_false.connection.ssl.verify).to be_falsey
+
+          params = [base_url, init_params_true]
+          session_true = Neo4j::Session.create_session(:server_db, params)
+          expect(session_true.connection.ssl.verify).to be_truthy
+        end
+      end
 
       it 'does work with two sessions' do
         base_url = 'http://localhost:7474'
@@ -155,19 +168,21 @@ module Neo4j::Server
 
       describe 'load_node' do
         it "generates 'START v0 = node(1915); RETURN v0'" do
-          expect(cypher_response).to receive(:entity_data)
-          expect(session).to receive(:_query).with("START n=node(1915) RETURN n").and_return(cypher_response)
+          r = double('cypher response', data: [{ 'foo' => 'data' }], is_transaction_response?: false, first_data: [{ 'foo' => 'foo' }],
+            error?: nil, error_msg: nil)
+          expect(session).to receive(:_query).with("START n=node(1915) RETURN n").and_return(r)
           session.load_node(1915)
         end
 
         it "returns nil if EntityNotFoundException" do
-          r = double('cypher response', error?: true, error_status: 'EntityNotFoundException')
+          r = double('cypher response', error?: true, error_status: 'EntityNotFoundException', data: [])
           expect(session).to receive(:_query).with("START n=node(1915) RETURN n").and_return(r)
           expect(session.load_node(1915)).to be_nil
         end
 
         it "raise an exception if there is an error but not an EntityNotFoundException exception" do
-          r = double('cypher response', error?: true, error_status: 'SomeError', response: double("response").as_null_object)
+          r = double('cypher response', error?: true, error_status: 'SomeError', is_transaction_response?: false, first_data: [{ 'foo' => 'foo' }],
+            response: double("response").as_null_object, data: [{ 'foo' => 'data' }])
           expect(r).to receive(:raise_error)
           expect(session).to receive(:_query).with("START n=node(1915) RETURN n").and_return(r)
           session.load_node(1915)

@@ -16,13 +16,15 @@ module Neo4j::Server
     # @return [Faraday]
     # @see https://github.com/lostisland/faraday
     def self.create_connection(params)
-      conn = Faraday.new do |b|
+      init_params = params[:initialize] and params.delete(:initialize)
+      conn = Faraday.new(init_params) do |b|
         b.request :basic_auth, params[:basic_auth][:username], params[:basic_auth][:password] if params[:basic_auth]
         b.request :json
         #b.response :logger
         b.response :json, :content_type => "application/json"
         #b.use Faraday::Response::RaiseError
-        b.adapter  Faraday.default_adapter
+        b.use Faraday::Adapter::NetHttpPersistent
+        # b.adapter  Faraday.default_adapter
       end
       conn.headers = {'Content-Type' => 'application/json'}
       conn
@@ -102,29 +104,47 @@ module Neo4j::Server
 
     def load_node(neo_id)
       cypher_response = _query("START n=node(#{neo_id}) RETURN n")
-      if (!cypher_response.error?)
-        result = cypher_response.entity_data(neo_id)
-        CypherNode.new(self, result)
-      elsif (cypher_response.error_status =~ /EntityNotFound/)
-        return nil
-      else
-        cypher_response.raise_error
-      end
+      load_entity(CypherNode, cypher_response)
     end
 
     def load_relationship(neo_id)
-      cypher_response = _query("START r=relationship(#{neo_id}) RETURN TYPE(r)")
-      if (!cypher_response.error?)
-        CypherRelationship.new(self, neo_id, cypher_response.first_data)
-      elsif (cypher_response.error_msg =~ /not found/)  # Ugly that the Neo4j API gives us this error message
+      cypher_response = _query("START r=relationship(#{neo_id}) RETURN r")
+      load_entity(CypherRelationship, cypher_response)
+    end
+
+    def load_entity(clazz, cypher_response)
+      return nil if cypher_response.data.nil? || cypher_response.data[0].nil?
+      data  = if cypher_response.is_transaction_response?
+                cypher_response.rest_data_with_id
+              else
+                cypher_response.first_data
+              end
+
+      if cypher_response.error?
+        cypher_response.raise_error
+      elsif cypher_response.error_msg =~ /not found/  # Ugly that the Neo4j API gives us this error message
         return nil
       else
-        cypher_response.raise_error
+        clazz.new(self, data)
       end
     end
 
     def create_label(name)
       CypherLabel.new(self, name)
+    end
+
+    def uniqueness_constraints(label)
+      response = @connection.get("#{@resource_url}schema/constraint/#{label}/uniqueness")
+      expect_response_code(response, 200)
+      data_resource = response.body
+
+      property_keys = data_resource.map do |row|
+        row['property_keys'].map(&:to_sym)
+      end
+
+      {
+          property_keys: property_keys
+      }
     end
 
     def indexes(label)
@@ -158,7 +178,7 @@ module Neo4j::Server
     end
 
     def query(*args)
-      if [[String], [String, String]].include?(args.map(&:class))
+      if [[String], [String, Hash]].include?(args.map(&:class))
         query, params = args[0,2]
         response = _query(query, params)
         response.raise_error if response.error?
@@ -193,7 +213,7 @@ module Neo4j::Server
         curr_tx._query(q, params)
       else
         url = resource_url('cypher')
-        q = params.nil? ? {query: q} : {query: q, params: params}
+        q = params.nil? ? { 'query' => q } : { 'query' => q, 'params' => params}
         response = @connection.post(url, q)
         CypherResponse.create_with_no_tx(response)
       end
@@ -238,27 +258,27 @@ module Neo4j::Server
     end
 
 
-    def search_result_to_enumerable(response, ret, map)
-      return [] unless response.data
+    # def search_result_to_enumerable(response, ret, map)
+    #   return [] unless response.data
 
-      if (ret.size == 1)
-        Enumerator.new do |yielder|
-          response.data.each do |data|
-            yielder << map_column(key, map, data[0])
-          end
-        end
+    #   if (ret.size == 1)
+    #     Enumerator.new do |yielder|
+    #       response.data.each do |data|
+    #         yielder << map_column(key, map, data[0])
+    #       end
+    #     end
 
-      else
-        Enumerator.new do |yielder|
-          response.data.each do |data|
-            hash = {}
-            ret.each_with_index do |key, i|
-              hash[key] = map_column(key, map, data[i])
-            end
-            yielder << hash
-          end
-        end
-      end
-    end
+    #   else
+    #     Enumerator.new do |yielder|
+    #       response.data.each do |data|
+    #         hash = {}
+    #         ret.each_with_index do |key, i|
+    #           hash[key] = map_column(key, map, data[i])
+    #         end
+    #         yielder << hash
+    #       end
+    #     end
+    #   end
+    # end
   end
 end
